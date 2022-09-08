@@ -1,76 +1,82 @@
-import Parser from 'rss-parser'
-const parser = new Parser()
-import imgbbUploader from 'imgbb-uploader';
+import { load } from 'cheerio';
+import Parser from 'rss-parser';
+import * as dotenv from 'dotenv';
+import { Configuration, OpenAIApi } from 'openai';
 
-import captureWebsite from 'capture-website';
+dotenv.config();
 
-const accountSid = 'ACe0f5f9b23a14366fa55626345035e577';
-const authToken = '4716ae7619586314099bae7b86617df9';
-import Twilio from 'twilio'
-const client = Twilio(accountSid, authToken);
+let configuration = new Configuration({
+	apiKey: process.env.OPENAI_TOKEN
+});
+let openai = new OpenAIApi(configuration);
 
-async function alertHousingUpdate(feed) {
-	// alert me first priority
-	await client.messages
-		.create({
-			body: `HOUSING WAS UPDATE ${feed.items[0].link}`,
-			to: '+13853496686', // Text this number
-			from: '+19379362187', // From a valid Twilio number
-		})
+let parser = new Parser();
 
-	// capture image and save as screenshot.png
-	await captureWebsite.file(feed.items[0].link, 'screenshot.jpeg', {
-		scrollToElement: '.p-body-content',
-		height: 2000,
-		type: 'jpeg',
-		quality: 1,
+async function alertHousingUpdate(post) {
+	let rawData = await fetch(post.link).then(res => res.text());
+
+	let $ = load(rawData);
+	let postData = $('.bbWrapper')[0];
+
+	// get the update image src at top of post
+	let postImage = $(postData).find('.bbImage');
+	let imageSource = $(postImage).attr('src');
+
+	let postText = $(postData).text();
+
+	// lol the ai is funny!
+	let completion = await openai.createCompletion({
+		model: 'text-davinci-002',
+		prompt: postText + '\nTldr;',
 	});
 
-	// upload image to imgbb
-	const imgbb = await imgbbUploader("e3bd529add712a561fa1da99e6120baf", "screenshot.jpeg")
+	let summary = completion.data.choices[0].text;
 
-	// send discord message
-	// https://discord.com/api/webhooks/975237334628978738/qv8C_i9hAn_7_6zBR3bu5ddx6kUNN1pWlePgxajx_KnFLR_o25lYtq-35eQuss6wfTVO // my disc
-	// https://discord.com/api/webhooks/975409100064182312/oRxQUHll7WpTMeGJUnPosQ3RZdqSnzekD_-4rMcOczTXl9DYb9CmCPYIxpOKkIxNmbBM // speedwarp disc
-	var webhookURL = 'https://discord.com/api/webhooks/975409100064182312/oRxQUHll7WpTMeGJUnPosQ3RZdqSnzekD_-4rMcOczTXl9DYb9CmCPYIxpOKkIxNmbBM'
-	const res = await fetch(webhookURL, {
+	let webhookURL = process.env.HOUSING_EDITOR_WEBHOOK;
+
+	await fetch(webhookURL, {
 		method: 'POST',
 		headers: {
 			'Content-type': 'application/json',
 		},
 		body: JSON.stringify({
-			username: 'Housing Update Checker',
+			username: 'Housing Update Pinger',
 			avatar_url: 'https://cdn.discordapp.com/avatars/384695177366732800/30040872b7d91a2f09e76803c89779c2.webp?size=64',
-			content: `@everyone The Housing Update is here!\nCheck it out: ${feed.items[0].link}`,
+			embeds: [{
+				title: post.title,
+				description: '**Summary:** ' + summary,
+				image: { url: imageSource },
+				thumbnail: { url: 'https://i.imgur.com/Y3VP3Wa.gif' },
+				footer: { text: 'by ImaDoofus :)' },
+				color: 2550450,
+			}]
 		})
 	})
 
-	const res2 = await fetch(webhookURL, {
-		method: 'POST',
-		headers: {
-			'Content-type': 'application/json',
-		},
-		body: JSON.stringify({
-			username: 'Housing Update Checker',
-			avatar_url: 'https://cdn.discordapp.com/avatars/384695177366732800/30040872b7d91a2f09e76803c89779c2.webp?size=64',
-			content: `Here is a render of the post: ${imgbb.display_url}`,
-		})
-	})
-
-	process.exit() // end process
-
+	process.exit();
 }
 
-const ping = setInterval(async () => {
+async function checkHousingUpdate() {
 	try {
-		const feed = await parser.parseURL('https://hypixel.net/forums/news-and-announcements.4/index.rss')
-		console.log(feed.items[0].title)
-		if (feed.items[0].title.includes('Housing')) {
-			console.log('HOUSING UPDATED')
-			clearInterval(ping)
-			alertHousingUpdate(feed)
+		let feed = await parser.parseURL('https://hypixel.net/forums/4/index.rss')
+		if (feed.items[0].title.includes('Housing')) return;
+		if (feed.items[0].creator !== 'ConnorLinfoot') return;
+		switch (feed.items[0].title) {
+			// make sure old forum posts don't trigger the bot
+			case 'Housing Update - Conditions, Item Actions, and more!': return;
+			case 'Housing Update - Scoreboard Editor, Event Actions, Local Stats, and more!': return;
+			case 'Housing - New Plot Size, Custom NPCs, Item Editor, and more!': return;
+			case 'Housing - Custom Groups, Action Improvements, Audit Logs and More': return;
+			case 'Housing - Regions, Actions, Better Pro Tools + More': return;
+			case 'Housing Update - Multiple Houses, New Lobby, New Themes + More!': return;
 		}
+		alertHousingUpdate(feed.items[0]);
 	} catch (err) {
 		console.log(err)
 	}
-}, 1000 * 20) // every 20 seconds
+}
+
+checkHousingUpdate();
+setInterval(async () => {
+	await checkHousingUpdate();
+}, 1000 * 10)
