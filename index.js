@@ -59,7 +59,7 @@ async function alertHousingUpdate(post) {
 async function checkHousingUpdate() {
 	try {
 		let feed = await parser.parseURL('https://hypixel.net/forums/4/index.rss')
-		if (feed.items[0].title.includes('Housing')) return;
+		if (!feed.items[0].title.includes('Housing')) return;
 		if (feed.items[0].creator !== 'ConnorLinfoot') return;
 		switch (feed.items[0].title) {
 			// make sure old forum posts don't trigger the bot
